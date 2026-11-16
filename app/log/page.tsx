@@ -6,6 +6,7 @@ import { LogExplorer } from "@/components/log-explorer";
 import { PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "יומן הטיסה" };
 
 export default async function LogPage() {
   const [{ entries }, write] = await Promise.all([getFlightData(), canWrite()]);

@@ -5,6 +5,7 @@ import { Milestones } from "@/components/milestones";
 import { EmptyState, FlapCode, PageHeader, StatusChip, TONE, cn } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "היעדים שלי" };
 
 const GATES = ["A1", "B2", "C3", "D4", "E5"];
 const CODES = ["DST", "MTH", "MVP", "GOL", "ARV"];

@@ -3,6 +3,7 @@ import { getFlightData } from "@/lib/data";
 import { EmptyState, Field, PageHeader, cn } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "תחקיר שבועי" };
 
 const SECTIONS = [
   { key: "tried", label: "מה ניסיתי", code: "ATTEMPTS" },

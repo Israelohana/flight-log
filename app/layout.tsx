@@ -5,7 +5,9 @@ import { SourceBanner } from "@/components/source-banner";
 import { getFlightData } from "@/lib/data";
 
 export const metadata: Metadata = {
-  title: "Flight Log — יומן טיסה",
+  title: { default: "Flight Log — יומן טיסה", template: "%s · Flight Log" },
+  applicationName: "Flight Log",
+  appleWebApp: { capable: true, title: "Flight Log", statusBarStyle: "black-translucent" },
   description: "מסע הלמידה שלי בעולם ה-AI · קורס Flying Solo, שדרות",
 };
 
