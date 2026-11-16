@@ -13,19 +13,60 @@ const TAB_KEYWORDS: Record<TabKey, string[]> = {
   debrief: ["סיכום", "שבועי", "debrief", "weekly"],
 };
 
+/**
+ * Credentials come either from GOOGLE_SERVICE_ACCOUNT_JSON (the whole downloaded key file, pasted as-is)
+ * or from GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY.
+ */
+function credentials(): { email?: string; key?: string } {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
+  if (raw) {
+    try {
+      const json = JSON.parse(raw) as { client_email?: string; private_key?: string };
+      return { email: json.client_email, key: cleanKey(json.private_key) };
+    } catch {
+      return {};
+    }
+  }
+  return { email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim().replace(/^["']|["']$/g, ""), key: cleanKey(process.env.GOOGLE_PRIVATE_KEY) };
+}
+
+/** Forgiving about how the key was pasted: surrounding quotes, literal "\n", Windows line endings, stray spaces. */
+function cleanKey(key?: string) {
+  if (!key) return undefined;
+  return key
+    .trim()
+    .replace(/^["']|["'],?$/g, "")
+    .replace(/\\n/g, "\n")
+    .replace(/\r/g, "")
+    .trim()
+    .concat("\n");
+}
+
 export function sheetsConfigured() {
-  return Boolean(
-    process.env.GOOGLE_SHEET_ID &&
-      process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL &&
-      process.env.GOOGLE_PRIVATE_KEY,
-  );
+  const { email, key } = credentials();
+  return Boolean(process.env.GOOGLE_SHEET_ID && email && key);
+}
+
+/** Explains a failed sign-in in plain words, without exposing the key. */
+export function diagnoseAuth(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  const { email, key } = credentials();
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON && !email)
+    return "GOOGLE_SERVICE_ACCOUNT_JSON לא נקרא כ-JSON תקין. הדביקו את כל תוכן הקובץ שירד מ-Google, מ-{ ועד }.";
+  if (!key?.includes("-----BEGIN PRIVATE KEY-----") || !key.includes("-----END PRIVATE KEY-----"))
+    return "המפתח הפרטי לא שלם: חסרה בו השורה BEGIN PRIVATE KEY או END PRIVATE KEY. העתיקו את כל הערך של private_key.";
+  if (/DECODER|PEM|asn1|bad base64|unsupported/i.test(msg))
+    return "המפתח הפרטי הודבק בפורמט שגוי. הכי פשוט: מחקו את GOOGLE_PRIVATE_KEY ו-GOOGLE_SERVICE_ACCOUNT_EMAIL, והוסיפו GOOGLE_SERVICE_ACCOUNT_JSON עם כל תוכן קובץ ה-JSON.";
+  if (/invalid_grant|account not found|invalid_client|Invalid JWT/i.test(msg))
+    return `Google לא מזהה את ה-Service Account (${email}). בדקו שהכתובת והמפתח מאותו קובץ JSON, ושהמפתח לא נמחק.`;
+  return `ההתחברות ל-Google נכשלה: ${msg.slice(0, 160)}`;
 }
 
 function client(write = false) {
+  const { email, key } = credentials();
   return new JWT({
-    email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    // Vercel stores the key with literal "\n"; turn them back into newlines.
-    key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+    email,
+    key,
     scopes: [
       write
         ? "https://www.googleapis.com/auth/spreadsheets"
@@ -38,8 +79,8 @@ async function call<T>(path: string, init?: RequestInit & { write?: boolean }): 
   let token: string | null | undefined;
   try {
     ({ token } = await client(init?.write).getAccessToken());
-  } catch {
-    throw new Error("ההתחברות ל-Google נכשלה. בדקו את GOOGLE_SERVICE_ACCOUNT_EMAIL ואת GOOGLE_PRIVATE_KEY (כולל ה-\\n).");
+  } catch (e) {
+    throw new Error(diagnoseAuth(e));
   }
   const res = await fetch(`${API}/${process.env.GOOGLE_SHEET_ID}${path}`, {
     ...init,
@@ -48,8 +89,10 @@ async function call<T>(path: string, init?: RequestInit & { write?: boolean }): 
   });
   if (!res.ok) {
     const body = await res.text();
+    if (res.status === 403 && /has not been used|is disabled|SERVICE_DISABLED/i.test(body))
+      throw new Error("Google Sheets API לא מופעל בפרויקט ב-Google Cloud. הפעילו אותו ב-APIs & Services → Library → Google Sheets API → Enable.");
     if (res.status === 403)
-      throw new Error("אין הרשאה לגיליון. שתפו אותו עם כתובת ה-Service Account (צפייה מספיקה לקריאה).");
+      throw new Error(`אין הרשאה לגיליון. שתפו אותו עם ${credentials().email ?? "כתובת ה-Service Account"} בהרשאת Editor.`);
     if (res.status === 404) throw new Error("הגיליון לא נמצא. בדקו את GOOGLE_SHEET_ID.");
     throw new Error(`Google Sheets ${res.status}: ${body.slice(0, 200)}`);
   }
