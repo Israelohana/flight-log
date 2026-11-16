@@ -17,17 +17,30 @@ const TAB_KEYWORDS: Record<TabKey, string[]> = {
  * Credentials come either from GOOGLE_SERVICE_ACCOUNT_JSON (the whole downloaded key file, pasted as-is)
  * or from GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY.
  */
-function credentials(): { email?: string; key?: string } {
+type Creds = { email?: string; key?: string; source: "json" | "json-invalid" | "separate" | "none" };
+
+function credentials(): Creds {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
   if (raw) {
     try {
-      const json = JSON.parse(raw) as { client_email?: string; private_key?: string };
-      return { email: json.client_email, key: cleanKey(json.private_key) };
+      // TextEdit and some editors turn " into smart quotes; undo that before parsing
+      const fixed = raw.replace(/[\u201C\u201D\u201E\u201F]/g, '"').replace(/^\uFEFF/, "");
+      const json = JSON.parse(fixed) as { client_email?: string; private_key?: string };
+      return { email: json.client_email, key: cleanKey(json.private_key), source: "json" };
     } catch {
-      return {};
+      return { source: "json-invalid" };
     }
   }
-  return { email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim().replace(/^["']|["']$/g, ""), key: cleanKey(process.env.GOOGLE_PRIVATE_KEY) };
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim().replace(/^["']|["']$/g, "");
+  const key = cleanKey(process.env.GOOGLE_PRIVATE_KEY);
+  return { email, key, source: email || key ? "separate" : "none" };
+}
+
+/** Safe facts about the configuration (never the key itself), shown with connection errors. */
+function credsInfo(c: Creds) {
+  const src = c.source === "json" ? "GOOGLE_SERVICE_ACCOUNT_JSON" : c.source === "json-invalid" ? "JSON לא תקין" : "משתנים נפרדים";
+  const k = c.key ?? "";
+  return `[מקור: ${src} · מפתח: ${k.length} תווים · BEGIN ${k.includes("BEGIN PRIVATE KEY") ? "✓" : "✗"} · END ${k.includes("END PRIVATE KEY") ? "✓" : "✗"}]`;
 }
 
 /** Forgiving about how the key was pasted: surrounding quotes, literal "\n", Windows line endings, stray spaces. */
@@ -43,23 +56,26 @@ function cleanKey(key?: string) {
 }
 
 export function sheetsConfigured() {
-  const { email, key } = credentials();
-  return Boolean(process.env.GOOGLE_SHEET_ID && email && key);
+  const c = credentials();
+  // an invalid JSON still counts as "configured", so the user sees the error instead of demo data
+  return Boolean(process.env.GOOGLE_SHEET_ID && (c.source === "json-invalid" || (c.email && c.key)));
 }
 
 /** Explains a failed sign-in in plain words, without exposing the key. */
 export function diagnoseAuth(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
-  const { email, key } = credentials();
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON && !email)
-    return "GOOGLE_SERVICE_ACCOUNT_JSON לא נקרא כ-JSON תקין. הדביקו את כל תוכן הקובץ שירד מ-Google, מ-{ ועד }.";
+  const c = credentials();
+  const { email, key } = c;
+  const info = credsInfo(c);
+  if (c.source === "json-invalid")
+    return `GOOGLE_SERVICE_ACCOUNT_JSON לא נקרא כ-JSON תקין. הדביקו את כל תוכן הקובץ שירד מ-Google, מ-{ ועד }. ${info}`;
   if (!key?.includes("-----BEGIN PRIVATE KEY-----") || !key.includes("-----END PRIVATE KEY-----"))
-    return "המפתח הפרטי לא שלם: חסרה בו השורה BEGIN PRIVATE KEY או END PRIVATE KEY. העתיקו את כל הערך של private_key.";
+    return `המפתח הפרטי לא שלם: חסרה בו השורה BEGIN PRIVATE KEY או END PRIVATE KEY. ${info}`;
   if (/DECODER|PEM|asn1|bad base64|unsupported/i.test(msg))
-    return "המפתח הפרטי הודבק בפורמט שגוי. הכי פשוט: מחקו את GOOGLE_PRIVATE_KEY ו-GOOGLE_SERVICE_ACCOUNT_EMAIL, והוסיפו GOOGLE_SERVICE_ACCOUNT_JSON עם כל תוכן קובץ ה-JSON.";
+    return `המפתח הפרטי הודבק בפורמט שגוי. ${info}`;
   if (/invalid_grant|account not found|invalid_client|Invalid JWT/i.test(msg))
-    return `Google לא מזהה את ה-Service Account (${email}). בדקו שהכתובת והמפתח מאותו קובץ JSON, ושהמפתח לא נמחק.`;
-  return `ההתחברות ל-Google נכשלה: ${msg.slice(0, 160)}`;
+    return `Google לא מזהה את ה-Service Account (${email}). בדקו שהכתובת והמפתח מאותו קובץ JSON, ושהמפתח לא נמחק. ${info}`;
+  return `ההתחברות ל-Google נכשלה: ${msg.slice(0, 160)} ${info}`;
 }
 
 function client(write = false) {
